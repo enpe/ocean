@@ -176,6 +176,27 @@ if (OCEAN_THIRD_PARTY_LAYOUT STREQUAL "python")
         message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
 
+    # Determine MSVC toolset string (Windows only)
+    # Maps CMake's MSVC_TOOLSET_VERSION to Ocean's naming convention:
+    #   MSVC_TOOLSET_VERSION 145 (VS 2026) -> vc145
+    #   MSVC_TOOLSET_VERSION 143 (VS 2022) -> vc143
+    #   MSVC_TOOLSET_VERSION 142 (VS 2019) -> vc142
+    #   MSVC_TOOLSET_VERSION 141 (VS 2017) -> vc141
+    set(_ocean_3p_toolset "")
+    if (WIN32 AND MSVC)
+        if (MSVC_TOOLSET_VERSION GREATER_EQUAL 145)
+            set(_ocean_3p_toolset "_vc145")
+        elseif (MSVC_TOOLSET_VERSION GREATER_EQUAL 143)
+            set(_ocean_3p_toolset "_vc143")
+        elseif (MSVC_TOOLSET_VERSION GREATER_EQUAL 142)
+            set(_ocean_3p_toolset "_vc142")
+        elseif (MSVC_TOOLSET_VERSION GREATER_EQUAL 141)
+            set(_ocean_3p_toolset "_vc141")
+        else()
+            message(WARNING "Unknown MSVC toolset version: ${MSVC_TOOLSET_VERSION}")
+        endif()
+    endif()
+
     # Determine link type
     if (BUILD_SHARED_LIBS)
         set(_ocean_3p_link "shared")
@@ -184,14 +205,27 @@ if (OCEAN_THIRD_PARTY_LAYOUT STREQUAL "python")
     endif()
 
     # Determine debug suffix
+    # For multi-config generators (Visual Studio, Xcode), CMAKE_BUILD_TYPE is empty.
+    # The Python build script passes separate build/install dirs per config, so we
+    # check CMAKE_BUILD_TYPE when set. If empty, we try both with and without _debug.
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(_ocean_3p_config "_debug")
     else()
         set(_ocean_3p_config "")
     endif()
 
-    # Build the target string: <platform>_<arch>_<link>[_debug]
-    set(_ocean_3p_target "${_ocean_3p_platform}_${_ocean_3p_arch}_${_ocean_3p_link}${_ocean_3p_config}")
+    # Build the target string: <platform>_<arch>[_toolset]_<link>[_debug]
+    set(_ocean_3p_target "${_ocean_3p_platform}_${_ocean_3p_arch}${_ocean_3p_toolset}_${_ocean_3p_link}${_ocean_3p_config}")
+
+    # For multi-config generators, if the target dir doesn't exist, try with _debug suffix
+    if (NOT CMAKE_BUILD_TYPE AND NOT EXISTS "${OCEAN_THIRD_PARTY_ROOT}/zlib/lib/${_ocean_3p_target}")
+        # Check if debug variant exists to confirm the naming pattern
+        set(_ocean_3p_target_debug "${_ocean_3p_platform}_${_ocean_3p_arch}${_ocean_3p_toolset}_${_ocean_3p_link}_debug")
+        if (EXISTS "${OCEAN_THIRD_PARTY_ROOT}/zlib/lib/${_ocean_3p_target_debug}" OR
+            EXISTS "${OCEAN_THIRD_PARTY_ROOT}/zlib/lib/${_ocean_3p_target}")
+            # Keep the non-debug target; debug libraries will be found via explicit hints below
+        endif()
+    endif()
 
     message(STATUS "OCEAN_THIRD_PARTY_LAYOUT = python")
     message(STATUS "OCEAN_THIRD_PARTY_ROOT = ${OCEAN_THIRD_PARTY_ROOT}")
@@ -354,14 +388,30 @@ if (OCEAN_THIRD_PARTY_LAYOUT STREQUAL "python")
     set(_libusb_lib_path "${OCEAN_THIRD_PARTY_ROOT}/libusb/lib/${_ocean_3p_target}")
     if (EXISTS "${_libusb_lib_path}")
         if (WIN32)
-            set(_libusb_lib_name "usb${_debug_suffix}.lib")
+            set(_libusb_lib_name "libusb${_debug_suffix}.lib")
         else()
             set(_libusb_lib_name "libusb${_debug_suffix}.a")
         endif()
         if (EXISTS "${_libusb_lib_path}/${_libusb_lib_name}")
             set(LIBUSB_1_LIBRARY "${_libusb_lib_path}/${_libusb_lib_name}" CACHE FILEPATH "libusb library" FORCE)
             set(LIBUSB_1_INCLUDE_DIR "${OCEAN_THIRD_PARTY_ROOT}/libusb/h/${_ocean_3p_platform}" CACHE PATH "libusb include dir" FORCE)
+            # Also set plural forms so Findlibusb-1.0.cmake's cache check works
+            set(LIBUSB_1_LIBRARIES ${LIBUSB_1_LIBRARY})
+            set(LIBUSB_1_INCLUDE_DIRS ${LIBUSB_1_INCLUDE_DIR})
             message(STATUS "  LIBUSB_1_LIBRARY = ${LIBUSB_1_LIBRARY}")
+        endif()
+    endif()
+
+    # Eigen3 - header-only library, no lib/ directory
+    if (NOT TARGET Eigen3::Eigen)
+        set(_eigen_include "${OCEAN_THIRD_PARTY_ROOT}/eigen/h/${_ocean_3p_platform}/eigen3")
+        if (EXISTS "${_eigen_include}/Eigen")
+            add_library(Eigen3::Eigen INTERFACE IMPORTED)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${_eigen_include}")
+            set(Eigen3_FOUND TRUE)
+            set(EIGEN3_FOUND TRUE)
+            message(STATUS "  Eigen3::Eigen = ${_eigen_include}")
         endif()
     endif()
 
